@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LaunchBoxYamlImporter")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+913ed7c3e0cfa62e339b66ec5714dd7b4a59255d")]
 [assembly: System.Reflection.AssemblyProductAttribute("LaunchBoxYamlImporter")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LaunchBoxYamlImporter")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

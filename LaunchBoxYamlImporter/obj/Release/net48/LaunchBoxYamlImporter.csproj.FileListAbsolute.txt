@@ -12,3 +12,4 @@ C:\Users\richa\workspace_local\launchbox2playnite\LaunchBoxYamlImporter\bin\Rele
 C:\Users\richa\workspace_local\launchbox2playnite\LaunchBoxYamlImporter\obj\Release\net48\LaunchBo.27ABDD56.Up2Date
 C:\Users\richa\workspace_local\launchbox2playnite\LaunchBoxYamlImporter\obj\Release\net48\LaunchBoxYamlImporter.dll
 C:\Users\richa\workspace_local\launchbox2playnite\LaunchBoxYamlImporter\obj\Release\net48\LaunchBoxYamlImporter.pdb
+C:\Users\richa\workspace_local\launchbox2playnite\LaunchBoxYamlImporter\obj\Release\net48\LaunchBoxYamlImporter.sourcelink.json

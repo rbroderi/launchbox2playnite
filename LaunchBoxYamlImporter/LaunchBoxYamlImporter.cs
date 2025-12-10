@@ -52,7 +52,7 @@ namespace LaunchBoxYamlImporter
                 var yamlText = File.ReadAllText(path);
 
                 var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .WithNamingConvention(NullNamingConvention.Instance)
                     .IgnoreUnmatchedProperties()
                     .Build();
 
@@ -79,7 +79,9 @@ namespace LaunchBoxYamlImporter
                     return;
                 }
 
-                var imported = ImportGames(games);
+                var yamlBasePath = Path.GetDirectoryName(path) ?? Directory.GetCurrentDirectory();
+
+                var imported = ImportGames(games, yamlBasePath);
 
                 PlayniteApi.Dialogs.ShowMessage(
                     $"Imported or updated {imported} games from LaunchBox YAML.",
@@ -94,7 +96,7 @@ namespace LaunchBoxYamlImporter
             }
         }
 
-        private int ImportGames(List<LaunchBoxGameYaml> sourceGames)
+        private int ImportGames(List<LaunchBoxGameYaml> sourceGames, string basePath)
         {
             var db = PlayniteApi.Database;
 
@@ -108,7 +110,11 @@ namespace LaunchBoxYamlImporter
             {
                 foreach (var src in sourceGames)
                 {
-                    if (string.IsNullOrWhiteSpace(src.Title))
+                    var title = !string.IsNullOrWhiteSpace(src.Title)
+                        ? src.Title
+                        : src.Name;
+
+                    if (string.IsNullOrWhiteSpace(title))
                     {
                         continue;
                     }
@@ -116,18 +122,22 @@ namespace LaunchBoxYamlImporter
                     // Very simple match: by name only.
                     // If you later add a stable ID from LaunchBox, you can match on that.
                     var existing = db.Games.FirstOrDefault(g =>
-                        string.Equals(g.Name, src.Title, StringComparison.OrdinalIgnoreCase));
+                        string.Equals(g.Name, title, StringComparison.OrdinalIgnoreCase));
 
-                    var game = existing ?? new Game(src.Title);
+                    var game = existing ?? new Game(title);
+
+                    var sortName = !string.IsNullOrWhiteSpace(src.SortTitle)
+                        ? src.SortTitle
+                        : (!string.IsNullOrWhiteSpace(src.SortingName)
+                            ? src.SortingName
+                            : title);
 
                     // Basic text fields
-                    game.SortingName = !string.IsNullOrWhiteSpace(src.SortTitle)
-                        ? src.SortTitle
-                        : src.Title;
+                    game.SortingName = sortName;
 
                     // If you had "description" separate from "notes" you can map accordingly
                     game.Description = src.Description ?? src.Notes;
-                    game.Notes = src.Notes;
+                    game.Notes = src.Notes ?? src.Description;
 
                     // Favorite flag from LaunchBox
                     game.Favorite = src.Favorite;
@@ -135,18 +145,42 @@ namespace LaunchBoxYamlImporter
                     // Mark as installed (these are local batch/exe launchers)
                     game.IsInstalled = true;
 
-                    // Install directory from ApplicationPath if we can resolve it
-                    game.InstallDirectory = GetInstallDirectory(src.ApplicationPath);
+                    var playPathSource = src.PlayAction?.Path ?? src.ApplicationPath;
+                    var playArgs = src.PlayAction?.Arguments ?? src.CommandLine;
+                    var workingDirSource = src.PlayAction?.WorkingDir;
+
+                    var resolvedPlayPath = ResolvePath(playPathSource, basePath);
+                    var resolvedWorkingDir = ResolvePath(workingDirSource, basePath);
+                    var resolvedConfigPath = ResolvePath(src.ConfigurationPath, basePath);
+                    var resolvedRootFolder = ResolvePath(src.RootFolder, basePath);
+
+                    // Install directory from RootFolder when available, else derive from play path
+                    if (!string.IsNullOrWhiteSpace(resolvedRootFolder) && Directory.Exists(resolvedRootFolder))
+                    {
+                        game.InstallDirectory = resolvedRootFolder;
+                    }
+                    else
+                    {
+                        game.InstallDirectory = GetInstallDirectory(resolvedPlayPath);
+                    }
 
                     // Replace Play action based on ApplicationPath / CommandLine
-                    game.GameActions = BuildGameActions(src.ApplicationPath, src.CommandLine);
+                    game.GameActions = BuildGameActions(
+                        resolvedPlayPath,
+                        playArgs,
+                        resolvedWorkingDir,
+                        resolvedConfigPath);
+
+                    LinkMedia(game, src, basePath);
 
                     // Platform mapping – uses PlatformIds, which exists in 6.14
                     if (!string.IsNullOrWhiteSpace(src.Platform))
                     {
-                        if (!platformsByName.TryGetValue(src.Platform, out var platform))
+                        var platformName = src.Platform!;
+
+                        if (!platformsByName.TryGetValue(platformName, out var platform))
                         {
-                            platform = new Platform(src.Platform);
+                            platform = new Platform(platformName);
                             db.Platforms.Add(platform);
                             platformsByName[platform.Name] = platform;
                         }
@@ -170,17 +204,16 @@ namespace LaunchBoxYamlImporter
             return imported;
         }
 
-        private static string GetInstallDirectory(string? applicationPath)
+        private static string GetInstallDirectory(string? sourcePath)
         {
-            if (string.IsNullOrWhiteSpace(applicationPath))
+            if (string.IsNullOrWhiteSpace(sourcePath))
             {
                 return string.Empty;
             }
 
             try
             {
-                // If it's relative, this will resolve relative to current working directory.
-                var full = Path.GetFullPath(applicationPath);
+                var full = Path.GetFullPath(sourcePath);
                 return Path.GetDirectoryName(full) ?? string.Empty;
             }
             catch
@@ -192,7 +225,9 @@ namespace LaunchBoxYamlImporter
 
         private static ObservableCollection<GameAction> BuildGameActions(
             string? applicationPath,
-            string? commandLine)
+            string? commandLine,
+            string? workingDirectory,
+            string? configurationPath)
         {
             var actions = new ObservableCollection<GameAction>();
 
@@ -201,18 +236,84 @@ namespace LaunchBoxYamlImporter
                 return actions;
             }
 
+            var workingDir = !string.IsNullOrWhiteSpace(workingDirectory)
+                ? workingDirectory!
+                : SafeDirName(applicationPath!);
+
             var act = new GameAction
             {
                 Name = "Play",
                 Path = applicationPath,
                 Arguments = commandLine ?? string.Empty,
-                WorkingDir = SafeDirName(applicationPath),
+                WorkingDir = workingDir,
                 Type = GameActionType.File,
                 IsPlayAction = true
             };
 
             actions.Add(act);
+
+            if (!string.IsNullOrWhiteSpace(configurationPath))
+            {
+                var configPath = configurationPath!;
+                var configWorkingDir = SafeDirName(configPath);
+
+                actions.Add(new GameAction
+                {
+                    Name = "Install / Configure",
+                    Path = configPath,
+                    Arguments = string.Empty,
+                    WorkingDir = configWorkingDir,
+                    Type = GameActionType.File,
+                    IsPlayAction = false
+                });
+            }
             return actions;
+        }
+
+        private void LinkMedia(Game game, LaunchBoxGameYaml src, string basePath)
+        {
+            TryAssignImage(path => game.CoverImage = path, src.Image, basePath);
+            TryAssignImage(path => game.BackgroundImage = path, src.BackgroundImage, basePath);
+            TryAssignImage(path => game.Icon = path, src.Icon, basePath);
+
+            var manualPath = ResolvePath(src.Manual, basePath);
+            if (!string.IsNullOrWhiteSpace(manualPath) && File.Exists(manualPath))
+            {
+                game.Manual = manualPath;
+            }
+        }
+
+        private void TryAssignImage(Action<string> setter, string? sourcePath, string basePath)
+        {
+            var resolved = ResolvePath(sourcePath, basePath);
+            if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+            {
+                setter(resolved);
+            }
+        }
+
+        private static string ResolvePath(string? sourcePath, string basePath)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return string.Empty;
+            }
+
+            var relativePath = sourcePath!;
+
+            if (Path.IsPathRooted(relativePath))
+            {
+                return relativePath;
+            }
+
+            try
+            {
+                return Path.GetFullPath(Path.Combine(basePath, relativePath));
+            }
+            catch
+            {
+                return relativePath;
+            }
         }
 
         private static string SafeDirName(string path)
@@ -243,17 +344,46 @@ namespace LaunchBoxYamlImporter
         {
             public string? Id { get; set; }
             public string? Title { get; set; }
+            public string? Name { get; set; }
             public string? SortTitle { get; set; }
+            public string? SortingName { get; set; }
 
             public string? Platform { get; set; }
 
+            public string? Image { get; set; }
+            public string? BackgroundImage { get; set; }
+            public string? Icon { get; set; }
+            public List<string>? Screenshots { get; set; }
+            public List<string>? Videos { get; set; }
+
             public string? ApplicationPath { get; set; }
             public string? CommandLine { get; set; }
+            public string? ConfigurationPath { get; set; }
+            public string? RootFolder { get; set; }
+
+            public PlayActionYaml? PlayAction { get; set; }
+            public List<RomYaml>? Roms { get; set; }
+
+            public string? Manual { get; set; }
+            public string? LaunchBoxId { get; set; }
 
             public string? Description { get; set; }
             public string? Notes { get; set; }
 
             public bool Favorite { get; set; }
+        }
+
+        private sealed class PlayActionYaml
+        {
+            public string? Path { get; set; }
+            public string? WorkingDir { get; set; }
+            public string? Arguments { get; set; }
+        }
+
+        private sealed class RomYaml
+        {
+            public string? Path { get; set; }
+            public string? Size { get; set; }
         }
     }
 }
