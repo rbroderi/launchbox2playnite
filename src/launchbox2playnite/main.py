@@ -1,11 +1,36 @@
 from __future__ import annotations
 
+import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 from uuid import uuid4
 
 import yaml
+
+
+class _QuotedDumper(yaml.SafeDumper):
+    pass
+
+
+def _quoted_str_representer(dumper: yaml.SafeDumper, data: str):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+
+
+_QuotedDumper.add_representer(str, _quoted_str_representer)
+
+
+def dump_yaml(data, path: Path):
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(
+            data,
+            f,
+            sort_keys=False,
+            allow_unicode=True,
+            width=YAML_WIDTH,
+            Dumper=_QuotedDumper,
+        )
+
 
 # ----------------------------------------------------
 # CONFIG – change this to your eXo root
@@ -23,6 +48,7 @@ MANUALS_DIR = LAUNCHBOX_ROOT / "Manuals"
 OUTPUT_GAMES = Path("playnite_import_games.yaml")
 OUTPUT_PLAYLISTS = Path("playnite_import_playlists.yaml")
 OUTPUT_FOLDERS = Path("playnite_import_folders.yaml")
+YAML_WIDTH = sys.maxsize  # prevent PyYAML from hard-wrapping long paths
 
 ROOT_CATEGORY_NAME = "Computers"  # what to root the tree at
 
@@ -402,14 +428,12 @@ def import_launchbox_exo():
             games_by_platform_norm[norm_key(platform_name)].append(game["Id"])
 
     # --- write games yaml ---
-    with open(OUTPUT_GAMES, "w", encoding="utf-8") as f:
-        yaml.safe_dump(playnite_games, f, sort_keys=False, allow_unicode=True)
+    dump_yaml(playnite_games, OUTPUT_GAMES)
 
     # --- playlists ---
     playlists, playlists_by_lb_id = parse_playlists(games_by_lb_id)
 
-    with open(OUTPUT_PLAYLISTS, "w", encoding="utf-8") as f:
-        yaml.safe_dump(playlists, f, sort_keys=False, allow_unicode=True)
+    dump_yaml(playlists, OUTPUT_PLAYLISTS)
 
     # --- parents.xml → folder tree ---
     (
@@ -440,8 +464,7 @@ def import_launchbox_exo():
             playlists_by_lb_id,
         )
 
-        with open(OUTPUT_FOLDERS, "w", encoding="utf-8") as f:
-            yaml.safe_dump(folders, f, sort_keys=False, allow_unicode=True)
+        dump_yaml(folders, OUTPUT_FOLDERS)
 
         print(
             f"✔ Exported folder tree rooted at '{ROOT_CATEGORY_NAME}' to {OUTPUT_FOLDERS}"
