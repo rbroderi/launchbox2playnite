@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>LaunchBoxYamlImporter</AssemblyName>
+    <RootNamespace>LaunchBoxYamlImporter</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Adjust path to your Playnite installation -->
+    <Reference Include="Playnite.SDK">
+      <HintPath>C:\Users\richa\AppData\Local\Playnite\Playnite.SDK.dll</HintPath>
+    </Reference>
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="13.7.0" />
+  </ItemGroup>
+</Project>

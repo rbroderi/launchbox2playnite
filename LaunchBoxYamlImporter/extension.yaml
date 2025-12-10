@@ -1,0 +1,6 @@
+Id: LaunchBoxYamlImporter
+Name: LaunchBox YAML Importer
+Author: YourName
+Version: 1.0
+Module: LaunchBoxYamlImporter.dll
+Type: GenericPlugin
