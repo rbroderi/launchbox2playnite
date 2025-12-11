@@ -18,6 +18,7 @@ from defusedxml import ElementTree
 from naay import loads as naay_loads
 from PIL import Image
 from PIL import ImageStat
+from PIL import PngImagePlugin
 from PIL import UnidentifiedImageError
 from tqdm import tqdm
 
@@ -320,6 +321,7 @@ COVER_WIDTH = require_int(normalized_cover_cfg, "min_width")
 COVER_HEIGHT = require_int(normalized_cover_cfg, "min_height")
 COVER_ASPECT = COVER_WIDTH / COVER_HEIGHT
 COVER_MAX_STRETCH = require_float(normalized_cover_cfg, "max_stretch")
+NORMALIZED_COVER_VERSION = 2
 PROGRESS_LOG_INTERVAL = 200
 
 
@@ -522,18 +524,34 @@ def normalize_cover_image(  # noqa: PLR0914
     filename = safe_filename(source.stem or title, "png")
     dest = COVER_DIR / filename
 
+    target_width_px = (
+        max(COVER_WIDTH, int(target_width)) if target_width else COVER_WIDTH
+    )
+    target_height_px = max(1, round(target_width_px / COVER_ASPECT))
+
     try:
-        if dest.exists() and dest.stat().st_mtime >= source.stat().st_mtime:
-            return str(dest.resolve())
+        if dest.exists():
+            up_to_date = dest.stat().st_mtime >= source.stat().st_mtime
+            version_matches = False
+            try:
+                with Image.open(dest) as existing:
+                    version = existing.info.get("l2p_norm_version")
+                    size_matches = existing.size == (
+                        target_width_px,
+                        target_height_px,
+                    )
+                    version_matches = (
+                        version == str(NORMALIZED_COVER_VERSION) and size_matches
+                    )
+            except (OSError, ValueError):
+                version_matches = False
+
+            if up_to_date and version_matches:
+                return str(dest.resolve())
 
         with Image.open(source) as img_obj:
             img: Image.Image = img_obj.convert("RGBA")
             img = crop_dark_padding(img)
-
-            target_width_px = (
-                max(COVER_WIDTH, int(target_width)) if target_width else COVER_WIDTH
-            )
-            target_height_px = max(1, round(target_width_px / COVER_ASPECT))
 
             scale_by_height = target_height_px / img.height if img.height else 1.0
             scale_by_width = target_width_px / img.width if img.width else 1.0
@@ -571,7 +589,11 @@ def normalize_cover_image(  # noqa: PLR0914
                 (target_height_px - resized.height) // 2,
             )
             canvas.paste(resized, offset)
-            canvas.save(dest, format="PNG")
+
+            pnginfo = PngImagePlugin.PngInfo()
+            pnginfo.add_text("l2p_norm_version", str(NORMALIZED_COVER_VERSION))
+
+            canvas.save(dest, format="PNG", pnginfo=pnginfo)
 
         return str(dest.resolve())
     except (OSError, UnidentifiedImageError, ValueError) as exc:
