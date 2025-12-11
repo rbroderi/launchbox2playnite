@@ -11,3 +11,8 @@ wheels/
 playnite_import*
 LaunchBoxYamlImporter/obj/*
 LaunchBoxYamlImporter/obj
+YamlProbe/bin/
+YamlProbe/obj/
+config.yaml
+generated_icons/
+normalized_covers/

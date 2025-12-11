@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "OGl81eKoDNs=",
+  "dgSpecHash": "MI6AKUGHLkw=",
   "success": true,
   "projectFilePath": "C:\\Users\\richa\\workspace_local\\launchbox2playnite\\YamlProbe\\YamlProbe.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\richa\\.nuget\\packages\\microsoft.netframework.referenceassemblies\\1.0.3\\microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
+    "C:\\Users\\richa\\.nuget\\packages\\microsoft.netframework.referenceassemblies.net48\\1.0.3\\microsoft.netframework.referenceassemblies.net48.1.0.3.nupkg.sha512",
     "C:\\Users\\richa\\.nuget\\packages\\yamldotnet\\13.7.0\\yamldotnet.13.7.0.nupkg.sha512"
   ],
   "logs": []

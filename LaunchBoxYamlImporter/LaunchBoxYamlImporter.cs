@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Collections.ObjectModel;
+using System.Text;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
@@ -13,13 +14,19 @@ namespace LaunchBoxYamlImporter
 {
     public class LaunchBoxYamlImporter : GenericPlugin
     {
-        private static readonly ILogger logger = LogManager.GetLogger();
+        private readonly ILogger logger;
+        private readonly string logFilePath;
 
         // Give this plugin a stable GUID; if you already have one, keep that instead.
         public override Guid Id { get; } = new Guid("7b9f7c07-9f7f-4c8e-a37c-5e28c310aa01");
 
         public LaunchBoxYamlImporter(IPlayniteAPI api) : base(api)
         {
+            logger = LogManager.GetLogger();
+            logger.Info("LaunchBoxYamlImporter initialized");
+            logFilePath = GetLogFilePath();
+            AppendLog("LaunchBoxYamlImporter initialized (ctor)");
+
             Properties = new GenericPluginProperties
             {
                 HasSettings = false
@@ -38,6 +45,7 @@ namespace LaunchBoxYamlImporter
 
         private void ImportFromYaml()
         {
+            AppendLog("ImportFromYaml started");
             // Uses IDialogsFactory.SelectFile – this exists in SDK 6.14.0
             var path = PlayniteApi.Dialogs.SelectFile(
                 "YAML files (*.yaml;*.yml)|*.yaml;*.yml|All files (*.*)|*.*");
@@ -81,30 +89,70 @@ namespace LaunchBoxYamlImporter
 
                 var yamlBasePath = Path.GetDirectoryName(path) ?? Directory.GetCurrentDirectory();
 
-                var imported = ImportGames(games, yamlBasePath);
+                var stats = ImportGames(games, yamlBasePath, out var mediaIssues);
 
+                AppendLog($"ImportFromYaml completed: {stats.Processed} games processed. {stats}");
                 PlayniteApi.Dialogs.ShowMessage(
-                    $"Imported or updated {imported} games from LaunchBox YAML.",
+                    $"Imported {stats.Added} new and updated {stats.Updated} games (processed {stats.Processed}/{stats.Total}).",
                     "LaunchBox YAML Import");
+
+                if (mediaIssues.Count > 0)
+                {
+                    var details = string.Join(Environment.NewLine, mediaIssues.Take(10));
+                    var warningText = $"Imported with {mediaIssues.Count} media issues. Showing up to 10:{Environment.NewLine}{details}";
+                    AppendLog(warningText);
+                    PlayniteApi.Dialogs.ShowMessage(
+                        warningText,
+                        "LaunchBox YAML Import");
+                }
             }
             catch (Exception ex)
             {
-                logger.Error(ex, "Failed to import LaunchBox YAML.");
+                AppendLog($"Import failed: {ex.Message}");
                 PlayniteApi.Dialogs.ShowErrorMessage(
                     ex.Message,
                     "LaunchBox YAML Import Error");
             }
         }
 
-        private int ImportGames(List<LaunchBoxGameYaml> sourceGames, string basePath)
+        private ImportStats ImportGames(List<LaunchBoxGameYaml> sourceGames, string basePath, out List<string> mediaIssues)
         {
             var db = PlayniteApi.Database;
+            mediaIssues = new List<string>();
+
+            var coverSources = sourceGames.Count(g => !string.IsNullOrWhiteSpace(g.Image));
+            var bgSources = sourceGames.Count(g => !string.IsNullOrWhiteSpace(g.BackgroundImage));
+            var iconSources = sourceGames.Count(g => !string.IsNullOrWhiteSpace(g.Icon));
+            var manualSources = sourceGames.Count(g => !string.IsNullOrWhiteSpace(g.Manual));
+            AppendLog($"Deserialized media counts: cover={coverSources}, background={bgSources}, icon={iconSources}, manual={manualSources}");
 
             // Cache platforms by name (case-insensitive)
             var platformsByName = db.Platforms
                 .ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
-            var imported = 0;
+            var gamesByLaunchBoxId = new Dictionary<string, Game>(StringComparer.OrdinalIgnoreCase);
+            var gamesByTitle = new Dictionary<string, Game>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var existingGame in db.Games)
+            {
+                if (!string.IsNullOrWhiteSpace(existingGame.GameId))
+                {
+                    gamesByLaunchBoxId[existingGame.GameId] = existingGame;
+                }
+
+                if (!string.IsNullOrWhiteSpace(existingGame.Name))
+                {
+                    gamesByTitle[existingGame.Name] = existingGame;
+                }
+            }
+
+            var stats = new ImportStats
+            {
+                Total = sourceGames.Count
+            };
+
+            var seenLaunchBoxIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             using (db.BufferedUpdate())
             {
@@ -116,21 +164,56 @@ namespace LaunchBoxYamlImporter
 
                     if (string.IsNullOrWhiteSpace(title))
                     {
+                        stats.SkippedNoTitle++;
                         continue;
                     }
 
-                    // Very simple match: by name only.
-                    // If you later add a stable ID from LaunchBox, you can match on that.
-                    var existing = db.Games.FirstOrDefault(g =>
-                        string.Equals(g.Name, title, StringComparison.OrdinalIgnoreCase));
+                    var titleKey = title!;
 
-                    var game = existing ?? new Game(title);
+                    if (!seenTitles.Add(titleKey))
+                    {
+                        stats.DuplicateTitles++;
+                    }
+
+                    var launchBoxIdRaw = src.LaunchBoxId?.Trim();
+                    var launchBoxId = string.IsNullOrWhiteSpace(launchBoxIdRaw) ? null : launchBoxIdRaw;
+                    Game? existing = null;
+
+                    if (launchBoxId != null &&
+                        gamesByLaunchBoxId.TryGetValue(launchBoxId, out var byId))
+                    {
+                        existing = byId;
+                        stats.MatchedById++;
+                    }
+                    else if (gamesByTitle.TryGetValue(titleKey, out var byName))
+                    {
+                        existing = byName;
+                        stats.MatchedByTitle++;
+                    }
+
+                    var game = existing ?? new Game(titleKey)
+                    {
+                        Id = existing?.Id ?? Guid.NewGuid()
+                    };
+
+                    if (launchBoxId != null)
+                    {
+                        if (!seenLaunchBoxIds.Add(launchBoxId))
+                        {
+                            stats.DuplicateLaunchBoxIds++;
+                        }
+
+                        game.GameId = launchBoxId;
+                        gamesByLaunchBoxId[launchBoxId] = game;
+                    }
+
+                    gamesByTitle[titleKey] = game;
 
                     var sortName = !string.IsNullOrWhiteSpace(src.SortTitle)
                         ? src.SortTitle
                         : (!string.IsNullOrWhiteSpace(src.SortingName)
                             ? src.SortingName
-                            : title);
+                            : titleKey);
 
                     // Basic text fields
                     game.SortingName = sortName;
@@ -171,8 +254,6 @@ namespace LaunchBoxYamlImporter
                         resolvedWorkingDir,
                         resolvedConfigPath);
 
-                    LinkMedia(game, src, basePath);
-
                     // Platform mapping – uses PlatformIds, which exists in 6.14
                     if (!string.IsNullOrWhiteSpace(src.Platform))
                     {
@@ -188,20 +269,24 @@ namespace LaunchBoxYamlImporter
                         game.PlatformIds = new List<Guid> { platform.Id };
                     }
 
-                    if (existing == null)
+                    var isNewGame = existing == null;
+                    if (isNewGame)
                     {
                         db.Games.Add(game);
+                        stats.Added++;
                     }
                     else
                     {
-                        db.Games.Update(game);
+                        stats.Updated++;
                     }
 
-                    imported++;
+                    LinkMedia(game, src, basePath, mediaIssues);
+                    db.Games.Update(game);
                 }
             }
 
-            return imported;
+            AppendLog($"Import stats: {stats}");
+            return stats;
         }
 
         private static string GetInstallDirectory(string? sourcePath)
@@ -270,26 +355,149 @@ namespace LaunchBoxYamlImporter
             return actions;
         }
 
-        private void LinkMedia(Game game, LaunchBoxGameYaml src, string basePath)
+        private void LinkMedia(Game game, LaunchBoxGameYaml src, string basePath, List<string> mediaIssues)
         {
-            TryAssignImage(path => game.CoverImage = path, src.Image, basePath);
-            TryAssignImage(path => game.BackgroundImage = path, src.BackgroundImage, basePath);
-            TryAssignImage(path => game.Icon = path, src.Icon, basePath);
+            TryAssignMedia("cover", id => game.CoverImage = id, g => g.CoverImage, src.Image, basePath, game, mediaIssues);
+            TryAssignMedia("background", id => game.BackgroundImage = id, g => g.BackgroundImage, src.BackgroundImage, basePath, game, mediaIssues);
+            TryAssignMedia("icon", id => game.Icon = id, g => g.Icon, src.Icon, basePath, game, mediaIssues);
+            AssignManualPath(game, src.Manual, basePath, mediaIssues);
+        }
 
-            var manualPath = ResolvePath(src.Manual, basePath);
-            if (!string.IsNullOrWhiteSpace(manualPath) && File.Exists(manualPath))
+        private void TryAssignMedia(
+            string mediaLabel,
+            Action<string> setter,
+            Func<Game, string?> currentGetter,
+            string? sourcePath,
+            string basePath,
+            Game game,
+            List<string> mediaIssues)
+        {
+            AppendLog($"Game '{game.Name}': processing {mediaLabel}");
+            var resolved = ResolvePath(sourcePath, basePath);
+            AppendLog($"Game '{game.Name}': {mediaLabel} resolved path '{resolved}'");
+
+            if (string.IsNullOrWhiteSpace(resolved))
             {
-                game.Manual = manualPath;
+                AppendLog($"Game '{game.Name}': {mediaLabel} source path empty");
+                return;
+            }
+
+            if (!File.Exists(resolved))
+            {
+                if (!string.IsNullOrWhiteSpace(sourcePath))
+                {
+                    var msg = $"Missing {mediaLabel} for {game.Name}: {resolved}";
+                    mediaIssues.Add(msg);
+                    AppendLog(msg);
+                }
+                return;
+            }
+
+            var mediaId = ImportFileForGame(resolved, game, mediaLabel, mediaIssues);
+            if (string.IsNullOrWhiteSpace(mediaId))
+            {
+                AppendLog($"Game '{game.Name}': {mediaLabel} import returned empty ID");
+                return;
+            }
+
+            var existingId = currentGetter(game);
+            if (!string.IsNullOrWhiteSpace(existingId))
+            {
+                PlayniteApi.Database.RemoveFile(existingId);
+            }
+
+            AppendLog($"Game '{game.Name}': {mediaLabel} assigned file ID {mediaId}");
+            setter(mediaId!);
+        }
+
+        private void AssignManualPath(Game game, string? sourcePath, string basePath, List<string> mediaIssues)
+        {
+            var resolved = ResolvePath(sourcePath, basePath);
+            AppendLog($"Game '{game.Name}': manual resolved path '{resolved}'");
+
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                AppendLog($"Game '{game.Name}': manual source path empty");
+                return;
+            }
+
+            if (!File.Exists(resolved))
+            {
+                var msg = $"Missing manual for {game.Name}: {resolved}";
+                mediaIssues.Add(msg);
+                AppendLog(msg);
+                return;
+            }
+
+            try
+            {
+                resolved = Path.GetFullPath(resolved);
+                resolved = resolved.Replace('/', '\\');
+            }
+            catch
+            {
+                // keep original string if we can't expand
+            }
+
+            if (string.Equals(game.Manual, resolved, StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog($"Game '{game.Name}': manual path unchanged");
+                return;
+            }
+
+            game.Manual = resolved;
+            AppendLog($"Game '{game.Name}': manual path set to absolute path");
+        }
+
+
+        private string? ImportFileForGame(string filePath, Game game, string mediaLabel, List<string> mediaIssues)
+        {
+            try
+            {
+                if (game.Id == Guid.Empty)
+                {
+                    var missingIdMsg = $"Cannot import {mediaLabel} for {game.Name}: game has no ID.";
+                    mediaIssues.Add(missingIdMsg);
+                    AppendLog(missingIdMsg);
+                    return null;
+                }
+
+                var dbId = PlayniteApi.Database.AddFile(filePath, game.Id);
+                AppendLog($"Game '{game.Name}': {mediaLabel} added to DB with id {dbId}");
+                return dbId;
+            }
+            catch (Exception ex)
+            {
+                var msg = $"Failed to import {mediaLabel} for {game.Name} from {filePath}: {ex.Message}";
+                mediaIssues.Add(msg);
+                AppendLog(msg);
+                return null;
             }
         }
 
-        private void TryAssignImage(Action<string> setter, string? sourcePath, string basePath)
+        private void AppendLog(string message)
         {
-            var resolved = ResolvePath(sourcePath, basePath);
-            if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+            try
             {
-                setter(resolved);
+                var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}";
+                File.AppendAllLines(logFilePath, new[] { line }, Encoding.UTF8);
             }
+            catch
+            {
+                // swallow logging exceptions
+            }
+        }
+
+        private string GetLogFilePath()
+        {
+            var baseDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Playnite",
+                "ExtensionsData",
+                Id.ToString());
+
+            Directory.CreateDirectory(baseDir);
+            return Path.Combine(baseDir, "launchbox2playnite.log");
         }
 
         private static string ResolvePath(string? sourcePath, string basePath)
@@ -325,6 +533,25 @@ namespace LaunchBoxYamlImporter
             catch
             {
                 return string.Empty;
+            }
+        }
+
+        private sealed class ImportStats
+        {
+            public int Total { get; set; }
+            public int Added { get; set; }
+            public int Updated { get; set; }
+            public int SkippedNoTitle { get; set; }
+            public int MatchedById { get; set; }
+            public int MatchedByTitle { get; set; }
+            public int DuplicateLaunchBoxIds { get; set; }
+            public int DuplicateTitles { get; set; }
+
+            public int Processed => Added + Updated;
+
+            public override string ToString()
+            {
+                return $"total={Total}, added={Added}, updated={Updated}, matchedById={MatchedById}, matchedByTitle={MatchedByTitle}, skippedNoTitle={SkippedNoTitle}, duplicateLaunchBoxIds={DuplicateLaunchBoxIds}, duplicateTitles={DuplicateTitles}";
             }
         }
 

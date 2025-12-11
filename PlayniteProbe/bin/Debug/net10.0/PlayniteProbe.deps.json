@@ -1,0 +1,41 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "PlayniteProbe/1.0.0": {
+        "dependencies": {
+          "LiteDB": "5.0.19"
+        },
+        "runtime": {
+          "PlayniteProbe.dll": {}
+        }
+      },
+      "LiteDB/5.0.19": {
+        "runtime": {
+          "lib/netstandard2.0/LiteDB.dll": {
+            "assemblyVersion": "5.0.19.0",
+            "fileVersion": "5.0.19.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "PlayniteProbe/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "LiteDB/5.0.19": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-O8XPBptE4SygW2SN6skqg/VDVTrjpJ0p6+i7Cp8x8razbu2ORLSd6ep3JdhDIdL6h57Bcxv2BuVaN70IKpXI0Q==",
+      "path": "litedb/5.0.19",
+      "hashPath": "litedb.5.0.19.nupkg.sha512"
+    }
+  }
+}

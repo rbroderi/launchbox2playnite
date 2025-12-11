@@ -12,7 +12,7 @@ if (!File.Exists(file))
 	return;
 }
 
-var yamlText = await File.ReadAllTextAsync(file);
+var yamlText = File.ReadAllText(file);
 
 List<LaunchBoxGameYaml>? games = null;
 
@@ -42,10 +42,22 @@ try
 	Console.WriteLine($"NullNaming count: {games?.Count ?? 0}");
 	if (games != null)
 	{
+		var imageCount = games.Count(g => !string.IsNullOrWhiteSpace(g.Image));
+		Console.WriteLine($"Games with Image: {imageCount}");
+		var bgCount = games.Count(g => !string.IsNullOrWhiteSpace(g.BackgroundImage));
+		var iconCount = games.Count(g => !string.IsNullOrWhiteSpace(g.Icon));
+		var manualCount = games.Count(g => !string.IsNullOrWhiteSpace(g.Manual));
+		Console.WriteLine($"Backgrounds={bgCount} Icons={iconCount} Manuals={manualCount}");
 		var first = games.Count > 0 ? games[0] : null;
 		if (first != null)
 		{
-			Console.WriteLine($"First entry title='{first.Title}' name='{first.Name}' platform='{first.Platform}'");
+			Console.WriteLine($"First entry title='{first.Title}' name='{first.Name}' platform='{first.Platform}' image='{first.Image}'");
+		}
+
+		var starWars = games.FirstOrDefault(g => string.Equals(g.Name, "Star Wars Chess", StringComparison.OrdinalIgnoreCase));
+		if (starWars != null)
+		{
+			Console.WriteLine($"Star Wars Chess image='{starWars.Image}' background='{starWars.BackgroundImage}' icon='{starWars.Icon}' manual='{starWars.Manual}'");
 		}
 	}
 }

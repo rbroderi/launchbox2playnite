@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "UYYLDQoa2/4=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\richa\\workspace_local\\launchbox2playnite\\PlayniteProbe\\PlayniteProbe.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\richa\\.nuget\\packages\\litedb\\5.0.19\\litedb.5.0.19.nupkg.sha512"
+  ],
+  "logs": []
+}

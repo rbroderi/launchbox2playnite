@@ -5,9 +5,11 @@ default:
     just --list
 
 # Bundle the compiled plugin files into a Playnite extension package (.pext)
-bundle output="LaunchBoxYamlImporter.pext":
+bundle:
     dotnet restore
     dotnet build -c Release
+deploy output="LaunchBoxYamlImporter.pext":
+    just bundle
     @$ErrorActionPreference = "Stop"; \
     $projectRoot = Get-Location; \
     $files = @( \
@@ -23,4 +25,16 @@ bundle output="LaunchBoxYamlImporter.pext":
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }; \
     Compress-Archive -Path $files -DestinationPath $zipPath -Force; \
     Move-Item -Path $zipPath -Destination $destination -Force; \
-    Write-Host "Created $destination"
+    Write-Host "Created $destination"; \
+    $exoRoot = "C:\Users\richa\eXoWin9x"; \
+    $yamlFiles = @("playnite_import_games.yaml", "playnite_import_playlists.yaml", "playnite_import_folders.yaml"); \
+    foreach ($yaml in $yamlFiles) { \
+        Write-host "copying $yaml"; \
+        $src = Join-Path $projectRoot $yaml; \
+        if (Test-Path $src) { \
+            Copy-Item -Path $src -Destination $exoRoot -Force; \
+        } else { \
+            Write-Warning "YAML export not found: $src"; \
+        } \
+    }
+    start LaunchBoxYamlImporter.pext
