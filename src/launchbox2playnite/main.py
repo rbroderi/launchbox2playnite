@@ -17,6 +17,7 @@ import yaml
 from defusedxml import ElementTree
 from naay import loads as naay_loads
 from PIL import Image
+from PIL import ImageStat
 from PIL import UnidentifiedImageError
 from tqdm import tqdm
 
@@ -497,7 +498,7 @@ def generate_icon_from_cover(title: str, cover_path: str | None) -> str | None:
         return None
 
 
-def normalize_cover_image(
+def normalize_cover_image(  # noqa: PLR0914
     title: str, cover_path: str | None, target_width: int | None = None
 ) -> str | None:
     """Resize and pad cover art to the configured aspect ratio.
@@ -527,7 +528,7 @@ def normalize_cover_image(
 
         with Image.open(source) as img_obj:
             img: Image.Image = img_obj.convert("RGBA")
-            src_aspect = img.width / img.height if img.height else COVER_ASPECT
+            img = crop_dark_padding(img)
 
             target_width_px = (
                 max(COVER_WIDTH, int(target_width)) if target_width else COVER_WIDTH
@@ -536,15 +537,25 @@ def normalize_cover_image(
 
             scale_by_height = target_height_px / img.height if img.height else 1.0
             scale_by_width = target_width_px / img.width if img.width else 1.0
+            scale_factor = min(scale_by_height, scale_by_width)
 
-            scale = scale_by_height if src_aspect > COVER_ASPECT else scale_by_width
+            new_width = max(1, round(img.width * scale_factor))
+            new_height = max(1, round(img.height * scale_factor))
 
-            scale = min(scale, COVER_MAX_STRETCH)
+            stretch_limit = max(1.0, COVER_MAX_STRETCH)
 
-            new_size = (
-                max(1, int(img.width * scale)),
-                max(1, int(img.height * scale)),
-            )
+            if new_width < target_width_px and new_width > 0:
+                stretch = min(target_width_px / new_width, stretch_limit)
+                new_width = max(1, round(new_width * stretch))
+
+            if new_height < target_height_px and new_height > 0:
+                stretch = min(target_height_px / new_height, stretch_limit)
+                new_height = max(1, round(new_height * stretch))
+
+            new_width = min(new_width, target_width_px)
+            new_height = min(new_height, target_height_px)
+
+            new_size = (new_width, new_height)
 
             img_any = cast("Any", img)
             resized = cast(
@@ -846,6 +857,112 @@ def collect_manual(title: str, platform_name: str | None) -> str | None:
     dirs.append(MANUALS_DIR)
     matches = gather_media_files(title, dirs, ("pdf", "txt", "cbz", "cbr"))
     return matches[0] if matches else None
+
+
+def crop_dark_padding(
+    image: Image.Image,
+    brightness_threshold: float = 18.0,
+    variance_threshold: float = 12.0,
+) -> Image.Image:
+    """Trim dark padding bands using a simple MMSE-inspired scan.
+
+    Args:
+        image: Source RGBA image potentially containing dark borders.
+        brightness_threshold: Maximum mean luminance considered padding.
+        variance_threshold: Maximum variance for padded regions.
+
+    Returns:
+        Image.Image: Cropped image when padding is detected, original otherwise.
+    """
+    gray = image.convert("L")
+    width, height = gray.size
+    if width <= 2 or height <= 2:
+        return image
+
+    def band_stats(box: tuple[int, int, int, int]) -> tuple[float, float]:
+        stat = ImageStat.Stat(gray.crop(box))
+        return stat.mean[0], stat.var[0]
+
+    top = 0
+    while top < height - 1:
+        mean, var = band_stats((0, top, width, top + 1))
+        if mean <= brightness_threshold and var <= variance_threshold:
+            top += 1
+        else:
+            break
+
+    bottom = 0
+    while bottom < height - top - 1:
+        mean, var = band_stats((0, height - bottom - 1, width, height - bottom))
+        if mean <= brightness_threshold and var <= variance_threshold:
+            bottom += 1
+        else:
+            break
+
+    new_height = height - top - bottom
+    if new_height <= 1:
+        return image
+
+    left = 0
+    while left < width - 1:
+        mean, var = band_stats((left, top, left + 1, height - bottom))
+        if mean <= brightness_threshold and var <= variance_threshold:
+            left += 1
+        else:
+            break
+
+    right = 0
+    while right < width - left - 1:
+        mean, var = band_stats((width - right - 1, top, width - right, height - bottom))
+        if mean <= brightness_threshold and var <= variance_threshold:
+            right += 1
+        else:
+            break
+
+    new_width = width - left - right
+    if new_width <= 1:
+        return image
+
+    if top == 0 and bottom == 0 and left == 0 and right == 0:
+        return image
+
+    box = (left, top, width - right, height - bottom)
+    return image.crop(box)
+
+
+def deduplicate_cross_platform_games(games: list[GameDict]) -> None:  # noqa: C901
+    """Append suffixes to Windows 9x titles when 3x counterparts exist."""
+
+    def normalized_name(value: str | None) -> str | None:
+        if not value:
+            return None
+        return value.casefold()
+
+    grouped: dict[str, list[GameDict]] = defaultdict(list)
+    for game in games:
+        name = game.get("Name")
+        if not isinstance(name, str):
+            continue
+        key = normalized_name(name)
+        if key is None:
+            continue
+        grouped[key].append(game)
+
+    for entries in grouped.values():  # noqa: PLR1702
+        platforms = {
+            entry.get("Platform")
+            for entry in entries
+            if isinstance(entry.get("Platform"), str)
+        }
+        if "Windows 3x" not in platforms or "Windows 9x" not in platforms:
+            continue
+        for entry in entries:
+            if entry.get("Platform") != "Windows 9x":
+                continue
+            for field in ("Name", "SortingName"):
+                value = entry.get(field)
+                if isinstance(value, str) and not value.endswith("_win9x"):
+                    entry[field] = f"{value}_win9x"
 
 
 # ----------------------------------------------------
@@ -1347,6 +1464,8 @@ def import_launchbox_exo() -> None:  # noqa: PLR0914, PLR0915
         games_by_platform_norm[norm_key(platform_name)].extend(
             game["Id"] for game in games
         )
+
+    deduplicate_cross_platform_games(playnite_games)
 
     # --- write games yaml ---
     tqdm.write(f"Saving games to {OUTPUT_GAMES} ({len(playnite_games)} entries)…")
